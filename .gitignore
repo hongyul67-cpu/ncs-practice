@@ -1,0 +1,4 @@
+# 교재 원본(평문)은 절대 커밋 금지 — 배포에는 암호화된 bank.enc 만 들어간다
+ncs-data-교재.js
+build_deploy.py
+*.pdf
