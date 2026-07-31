@@ -49,7 +49,24 @@
   .linkbtn{background:none; border:none; color:var(--dim); font-size:.8rem;
     text-decoration:underline; cursor:pointer; padding:0; font-family:inherit}
 
+  /* 내 학습 기록 요약 */
+  .mystat{display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    margin:0 4px 14px; color:var(--sub); font-size:.86rem}
+  .mystat b{color:var(--ink)}
+  .mystat .linkbtn{margin-left:auto}
+
+  /* ⭐ 담기 버튼 */
+  .star{margin-left:auto; padding:4px 11px; border-radius:999px; cursor:pointer;
+    border:1px solid var(--line); background:#131a29; color:var(--sub);
+    font-size:.78rem; font-weight:700; font-family:inherit}
+  .star:hover{border-color:var(--warn); color:var(--ink)}
+  .star.on{background:#2c2410; border-color:#6b5320; color:var(--warn)}
+
   /* 설정 */
+  .seg.src button{position:relative}
+  .seg.src .cnt2{display:inline-block; margin-left:6px; padding:1px 7px; border-radius:999px;
+    background:rgba(0,0,0,.28); font-size:.74rem; font-weight:800}
+  .seg.src button.on .cnt2{background:rgba(255,255,255,.3)}
   .field{margin:16px 0}
   .field > label{display:block; font-weight:700; margin-bottom:8px; font-size:.95rem}
   .seg{display:flex; flex-wrap:wrap; gap:8px}
@@ -152,14 +169,16 @@ var ORDER=['comm','math','problem','resource','self','relation','info','tech','o
 var WEIGHT={comm:5, math:5, problem:5, resource:3, self:1, relation:1, info:1, tech:1, org:1, ethic:1};
 
 /* ═══════════════ 실전(교재) 문항 잠금 해제 ═══════════════ */
-var LOCK={ open:false, busy:false, msg:'', msgType:'', added:0 };
+var LOCK={ open:false, busy:false, msg:'', msgType:'', added:0, label:'', exp:null };
 var REMEMBER_KEY='ncs_practice_pw_v1';
 
 function b64(s){ var bin=atob(s), u=new Uint8Array(bin.length);
   for(var i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }
+function today(){ var d=new Date(); return new Date(d.getFullYear(),d.getMonth(),d.getDate()); }
 
+/* bank.enc = 본문을 임의의 내용키(CK)로 한 번 암호화 + CK를 암호마다 감싼 keys[]
+   모든 키가 같은 salt를 쓰므로 PBKDF2 계산은 딱 1회, 그 뒤 keys를 훑어 맞는 것을 찾는다. */
 function decryptBank(pass){
-  // bank.enc = { kdf:{salt,iter,hash}, iv, data }  ―  AES-GCM(gzip(원본 js))
   return fetch('bank.enc',{cache:'no-cache'}).then(function(r){
     if(!r.ok) throw new Error('FETCH');
     return r.json();
@@ -169,16 +188,32 @@ function decryptBank(pass){
       .then(function(base){
         return crypto.subtle.deriveKey(
           {name:'PBKDF2', salt:b64(m.kdf.salt), iterations:m.kdf.iter, hash:m.kdf.hash},
-          base, {name:'AES-GCM', length:256}, false, ['decrypt']);
+          base, {name:'AES-GCM', length:256}, false, ['decrypt','encrypt']);
       })
-      .then(function(key){
-        return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(m.iv)}, key, b64(m.data));
+      .then(function(kek){
+        if(m.v<2) return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(m.iv)},kek,b64(m.data))
+                    .then(function(buf){ return {buf:buf, info:{}}; });
+        // 감싼 키들을 차례로 풀어 본다(AES-GCM은 즉시라 수십 개도 순식간)
+        var i=0, keys=m.keys||[];
+        function next(){
+          if(i>=keys.length) throw new Error('BADPW');
+          var k=keys[i++];
+          return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(k.iv)},kek,b64(k.blob))
+            .then(function(p){ return JSON.parse(new TextDecoder().decode(p)); },
+                  function(){ return next(); });
+        }
+        return next().then(function(info){
+          if(info.exp && today() > new Date(info.exp+'T00:00:00')) { var e=new Error('EXPIRED'); e.exp=info.exp; throw e; }
+          return crypto.subtle.importKey('raw',b64(info.ck),{name:'AES-GCM'},false,['decrypt'])
+            .then(function(ck){ return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(m.iv)},ck,b64(m.data)); })
+            .then(function(buf){ return {buf:buf, info:info}; });
+        });
       })
-      .then(function(buf){
-        if(!m.gz) return new TextDecoder().decode(buf);
+      .then(function(res){
+        if(!m.gz) return {code:new TextDecoder().decode(res.buf), info:res.info};
         if(typeof DecompressionStream==='undefined') throw new Error('OLDBROWSER');
-        var st=new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
-        return new Response(st).text();
+        var st=new Blob([res.buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+        return new Response(st).text().then(function(t){ return {code:t, info:res.info}; });
       });
   });
 }
@@ -187,21 +222,25 @@ function countAll(){ return ORDER.reduce(function(s,k){ return s+poolCount(k); }
 
 function tryUnlock(pass, silent){
   if(LOCK.busy) return;
+  pass=String(pass).replace(/\s+/g,'');           // 코드에 넣은 공백은 무시
   LOCK.busy=true; LOCK.msg='잠금을 푸는 중입니다… (몇 초 걸립니다)'; LOCK.msgType='wait';
   renderSetup();
   var before=countAll();
-  decryptBank(pass).then(function(code){
-    (0,eval)(code);                       // 교재 문항을 AREAS에 합류
+  decryptBank(pass).then(function(r){
+    (0,eval)(r.code);                              // 교재 문항을 AREAS에 합류
     LOCK.open=true; LOCK.busy=false;
     LOCK.added=countAll()-before;
+    LOCK.label=r.info.label||''; LOCK.exp=r.info.exp||null;
     LOCK.msg=''; LOCK.msgType='';
     try{ localStorage.setItem(REMEMBER_KEY, pass); }catch(e){}
     renderSetup();
   }).catch(function(e){
     LOCK.busy=false;
-    if(e && e.message==='FETCH')          LOCK.msg='문항 파일(bank.enc)을 불러오지 못했습니다.';
-    else if(e && e.message==='OLDBROWSER')LOCK.msg='브라우저가 너무 오래되었습니다. 크롬·엣지 최신판에서 열어 주세요.';
-    else                                  LOCK.msg='암호가 올바르지 않습니다.';
+    var t=e&&e.message;
+    if(t==='FETCH')          LOCK.msg='문항 파일을 불러오지 못했습니다. 새로고침해 주세요.';
+    else if(t==='OLDBROWSER')LOCK.msg='브라우저가 너무 오래되었습니다. 크롬·엣지 최신판에서 열어 주세요.';
+    else if(t==='EXPIRED')   LOCK.msg='사용 기간이 끝난 코드입니다('+e.exp+'까지). 선생님께 새 코드를 받으세요.';
+    else                     LOCK.msg='코드가 올바르지 않습니다.';
     LOCK.msgType='err';
     if(silent){ LOCK.msg=''; LOCK.msgType=''; try{ localStorage.removeItem(REMEMBER_KEY); }catch(e2){} }
     renderSetup();
@@ -213,19 +252,71 @@ function relock(){
 }
 function lockCardHtml(){
   if(LOCK.open){
+    var until = LOCK.exp ? ' · '+LOCK.exp+'까지' : '';
     return '<div class="lock open"><div class="lockhead"><b>🔓 실전 연습 문제</b>'
-      +'<span class="chip">'+LOCK.added+'문항 사용 중</span></div>'
+      +'<span class="chip">'+LOCK.added+'문항'+esc(until)+'</span></div>'
       +'<p class="lockdesc">실전 문제가 출제 범위에 포함되었습니다. 이 기기에서는 다음에 자동으로 열립니다.</p>'
       +'<p style="margin:10px 0 0"><button class="linkbtn" id="relockBtn">이 기기에서 잠그기</button></p></div>';
   }
   return '<div class="lock"><div class="lockhead"><b>🔒 실전 연습 문제</b>'
     +'<span class="chip">잠김</span></div>'
-    +'<p class="lockdesc">수업 시간에 안내한 암호를 넣으면 실전 연습 문제가 함께 출제됩니다. '
-    +'암호 없이도 아래 <b>자작 연습 문제</b>는 바로 풀 수 있습니다.</p>'
-    +'<div class="pwrow"><input type="password" id="pwInput" placeholder="암호" autocomplete="off" '
-    +'autocapitalize="off" spellcheck="false"'+(LOCK.busy?' disabled':'')+'>'
+    +'<p class="lockdesc">수업 시간에 안내한 <b>8자리 코드</b>를 넣으면 실전 연습 문제가 함께 출제됩니다. '
+    +'코드 없이도 아래 <b>자작 연습 문제</b>는 바로 풀 수 있습니다.</p>'
+    +'<div class="pwrow"><input type="text" id="pwInput" placeholder="예) 1234 5678" autocomplete="off" '
+    +'inputmode="numeric" autocapitalize="off" spellcheck="false"'+(LOCK.busy?' disabled':'')+'>'
     +'<button id="pwBtn"'+(LOCK.busy?' disabled':'')+'>'+(LOCK.busy?'여는 중…':'열기')+'</button></div>'
     +'<p class="pwmsg '+LOCK.msgType+'">'+esc(LOCK.msg)+'</p></div>';
+}
+
+/* ═══════════════ 내 학습 기록 (오답·별표) ═══════════════ */
+var HIST_KEY='ncs_practice_hist_v1';
+var HIST=(function(){ try{ return JSON.parse(localStorage.getItem(HIST_KEY))||{}; }catch(e){ return {}; } })();
+function histSave(){ try{ localStorage.setItem(HIST_KEY, JSON.stringify(HIST)); }catch(e){} }
+function qid(q){ // 문항 본문으로 만든 짧은 해시 (FNV-1a)
+  // 보기는 풀 때마다 섞이므로 정렬해서 넣는다 → 셔플과 무관하게 같은 id
+  var s=(q.q||'')+'|'+(q.opts||[]).slice().sort().join('¦'), h=0x811c9dc5;
+  for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=(h*0x01000193)>>>0; }
+  return h.toString(36);
+}
+function rec(q){ return HIST[qid(q)]; }
+function markResult(q, ok){
+  var id=qid(q), r=HIST[id]||{w:0,r:0,b:0,t:0};
+  if(ok) r.r++; else r.w++;
+  r.t=Date.now(); HIST[id]=r;
+}
+function isStar(q){ var r=rec(q); return !!(r&&r.b); }
+function toggleStar(q){
+  var id=qid(q), r=HIST[id]||{w:0,r:0,b:0,t:0};
+  r.b=r.b?0:1; HIST[id]=r; histSave(); return !!r.b;
+}
+function allQuestions(){
+  var out=[], seen={};
+  ORDER.forEach(function(k){ pool(k,'all').forEach(function(q){
+    var id=qid(q); if(seen[id]) return; seen[id]=1; out.push({area:k, raw:q, id:id}); }); });
+  return out;
+}
+function histStats(){
+  var all=allQuestions(), wrong=0, star=0, fresh=0, solved=0, okSum=0, ngSum=0;
+  all.forEach(function(x){ var r=HIST[x.id];
+    if(!r||(!r.w&&!r.r)){ if(!r||!r.b) fresh++; else { fresh++; } }
+    if(r&&(r.w||r.r)){ solved++; okSum+=r.r; ngSum+=r.w; }
+    if(r&&r.w>0) wrong++;
+    if(r&&r.b) star++;
+  });
+  var tot=okSum+ngSum;
+  return { total:all.length, wrong:wrong, star:star, fresh:fresh, solved:solved,
+           pct: tot? Math.round(okSum/tot*100) : null };
+}
+function candidates(kind, level){
+  var lv=level||'all';
+  return allQuestions().filter(function(x){
+    if(lv!=='all' && pool(x.area,lv).indexOf(x.raw)<0) return false;
+    var r=HIST[x.id];
+    if(kind==='wrong') return !!(r&&r.w>0);
+    if(kind==='star')  return !!(r&&r.b);
+    if(kind==='fresh') return !(r&&(r.w||r.r));
+    return true;
+  });
 }
 
 /* ── 문제은행 수집: 각 영역의 모든 게임 + CBT 문항을 난이도별로 모음(중복 제거) ── */
@@ -290,7 +381,20 @@ function poolCountLvl(k,level){ return pool(k,level).length; }
 
 /* ── 상태 ── */
 var S=null;
-var CFG={ count:30, level:'all', mode:'real', picked:ORDER.slice() };
+var CFG={ count:30, level:'all', mode:'real', picked:ORDER.slice(), src:'random' };
+
+/* 오답·별표·안 푼 문항으로만 세션 만들기 */
+function buildFromHistory(cfg){
+  var cand=candidates(cfg.src, cfg.level);
+  if(!cand.length) return [];
+  if(cfg.src==='wrong'){        // 많이 틀린 것 → 최근 틀린 것 순
+    cand.sort(function(a,b){ var ra=HIST[a.id], rb=HIST[b.id];
+      return (rb.w-ra.w) || (rb.t-ra.t); });
+    cand=cand.slice(0, Math.max(cfg.count*3, cfg.count));
+    cand=shuffle(cand);
+  } else cand=shuffle(cand);
+  return cand.slice(0,cfg.count).map(function(x){ return { area:x.area, q:prep(x.raw) }; });
+}
 
 /* ─────────────── 화면: 설정 ─────────────── */
 function renderSetup(){
@@ -303,16 +407,29 @@ function renderSetup(){
     return '<button data-area="'+k+'" class="'+(CFG.picked.indexOf(k)>=0?'on':'')+'">'+areaIc(k)+' '+areaName(k).replace('능력','')+'<span class="cnt">'+poolCount(k)+'</span></button>';
   }).join('');
 
+  var st=histStats();
+  var srcBtn=function(v,label,n){ return '<button data-seg="src" data-val="'+v+'" class="'+(CFG.src===v?'on':'')+'">'
+    +label+(n==null?'':'<span class="cnt2">'+n+'</span>')+'</button>'; };
+  var srcs=srcBtn('random','🎲 랜덤 출제',null)+srcBtn('wrong','❌ 틀린 문항',st.wrong)
+          +srcBtn('star','⭐ 별표 문항',st.star)+srcBtn('fresh','🆕 안 푼 문항',st.fresh);
+  var statLine = st.solved
+    ? '푼 문항 <b>'+st.solved+'</b> / '+st.total+' · 누적 정답률 <b>'+(st.pct==null?'-':st.pct+'%')+'</b>'
+    : '아직 푼 기록이 없습니다. 랜덤 출제로 시작해 보세요.';
+
   app.innerHTML=''
   +'<h1>NCS 문제풀이 연습</h1>'
   +'<p class="tagline">문제은행 <b style="color:var(--ink)">'+totalBank+'문항</b>에서 매번 새로 랜덤 출제 → 자체 채점. 반복 복습용.</p>'
   +lockCardHtml()
+  +'<div class="mystat"><span>📈 '+statLine+'</span>'
+    +(st.solved?'<button class="linkbtn" id="clrHist">기록 지우기</button>':'')+'</div>'
   +'<div class="card">'
-    +'<div class="field"><label>① 문항 수</label><div class="seg">'+counts+'</div></div>'
-    +'<div class="field"><label>② 난이도</label><div class="seg">'+levels+'</div></div>'
-    +'<div class="field"><label>③ 출제 비중</label><div class="seg">'+modes+'</div>'
+    +'<div class="field"><label>① 출제 방식</label><div class="seg src">'+srcs+'</div>'
+      +'<p class="muted" style="margin:8px 2px 0" id="srcHint"></p></div>'
+    +'<div class="field"><label>② 문항 수</label><div class="seg">'+counts+'</div></div>'
+    +'<div class="field"><label>③ 난이도</label><div class="seg">'+levels+'</div></div>'
+    +'<div class="field" id="modeField"><label>④ 출제 비중</label><div class="seg">'+modes+'</div>'
       +'<p class="muted" style="margin:8px 2px 0" id="modeHint"></p></div>'
-    +'<div class="field" id="pickField" style="display:none"><label>④ 영역 선택</label>'
+    +'<div class="field" id="pickField" style="display:none"><label>⑤ 영역 선택</label>'
       +'<div class="areagrid">'+areaBtns+'</div>'
       +'<div class="selrow"><button data-sel="all">전체 선택</button><button data-sel="none">전체 해제</button><button data-sel="core">필수 4영역</button></div></div>'
     +'<button class="go" id="startBtn">시작하기 ▶</button>'
@@ -321,6 +438,16 @@ function renderSetup(){
   +'</div>';
 
   updateModeHint();
+  var srcHint={ random:'문제은행 전체에서 매번 새로 뽑습니다.',
+                wrong:'한 번이라도 틀린 문항만 모아 다시 풉니다. 많이 틀린 것부터 담습니다.',
+                star:'풀이·복습 화면에서 ⭐를 눌러 담아 둔 문항만 풉니다.',
+                fresh:'아직 한 번도 풀지 않은 문항만 풉니다.' }[CFG.src];
+  app.querySelector('#srcHint').textContent=srcHint;
+  app.querySelector('#modeField').style.display = CFG.src==='random' ? '' : 'none';
+  var ch=app.querySelector('#clrHist');
+  if(ch) ch.onclick=function(){
+    if(confirm('푼 기록과 별표를 모두 지웁니다. 계속할까요?')){ HIST={}; histSave(); renderSetup(); }
+  };
   var pwB=app.querySelector('#pwBtn'), pwI=app.querySelector('#pwInput');
   if(pwB && pwI){
     var go=function(){ var v=pwI.value.trim(); if(!v) return; tryUnlock(v,false); };
@@ -345,7 +472,7 @@ function renderSetup(){
     else if(s==='core') CFG.picked=['comm','math','problem','resource'];
     renderSetup();
   };});
-  app.querySelector('#pickField').style.display = CFG.mode==='pick' ? '' : 'none';
+  app.querySelector('#pickField').style.display = (CFG.src==='random'&&CFG.mode==='pick') ? '' : 'none';
   app.querySelector('#startBtn').onclick=start;
 }
 function updateModeHint(){
@@ -357,9 +484,20 @@ function updateModeHint(){
 }
 
 function start(){
-  var cfg={ count:CFG.count, level:CFG.level, mode:CFG.mode, picked:CFG.picked.slice() };
-  if(cfg.mode==='pick' && !cfg.picked.length){ alert('영역을 하나 이상 선택하세요.'); return; }
-  var list=buildSession(cfg);
+  var cfg={ count:CFG.count, level:CFG.level, mode:CFG.mode, picked:CFG.picked.slice(), src:CFG.src };
+  var list;
+  if(cfg.src==='random'){
+    if(cfg.mode==='pick' && !cfg.picked.length){ alert('영역을 하나 이상 선택하세요.'); return; }
+    list=buildSession(cfg);
+  } else {
+    list=buildFromHistory(cfg);
+    if(!list.length){
+      alert({ wrong:'틀린 문항이 아직 없습니다. 랜덤 출제로 먼저 풀어 보세요.',
+              star:'별표한 문항이 없습니다. 문제를 풀면서 ⭐를 눌러 담아 보세요.',
+              fresh:'안 푼 문항이 없습니다. 전부 한 번씩은 푸셨네요!' }[cfg.src]);
+      return;
+    }
+  }
   if(!list.length){ alert('출제할 문항이 없습니다. 난이도/영역을 바꿔 보세요.'); return; }
   S={ list:list, answers:list.map(function(){return null;}), i:0, startedAt:Date.now(), cfg:cfg };
   renderQuiz();
@@ -386,7 +524,9 @@ function renderQuiz(){
     +'<div class="bar"><i style="width:'+Math.round(done/n*100)+'%"></i></div>'
   +'</div>'
   +'<div class="card">'
-    +'<div class="qmeta"><span class="tag">'+areaIc(it.area)+' '+areaName(it.area)+'</span></div>'
+    +'<div class="qmeta"><span class="tag">'+areaIc(it.area)+' '+areaName(it.area)+'</span>'
+      +'<button class="star'+(isStar(q)?' on':'')+'" id="starBtn" title="나중에 다시 풀 문항으로 담기">'
+      +(isStar(q)?'⭐ 담음':'☆ 담기')+'</button></div>'
     +'<div class="qtext">'+esc(q.q)+'</div>'
     +condHtml+tableHtml
     +'<div class="opts">'+optsHtml+'</div>'
@@ -400,6 +540,8 @@ function renderQuiz(){
     +'<p class="sub" style="text-align:center;margin:12px 0 0">답안지에서 번호를 눌러 이동 · 언제든 채점 가능</p>'
   +'</div>';
 
+  var sb=app.querySelector('#starBtn');
+  if(sb) sb.onclick=function(){ toggleStar(q); renderQuiz(); };
   app.querySelectorAll('[data-opt]').forEach(function(b){ b.onclick=function(){
     S.answers[S.i]=parseInt(b.getAttribute('data-opt'),10); renderQuiz();
   };});
@@ -433,9 +575,11 @@ function renderResult(){
   S.list.forEach(function(it,j){
     var k=it.area; perArea[k]=perArea[k]||{c:0,t:0}; perArea[k].t++;
     var ok=S.answers[j]===it.q.answer;
+    markResult(it.q, ok);                       // 학습 기록에 반영
     if(ok){ correct++; perArea[k].c++; }
     else wrongs.push({it:it, j:j});
   });
+  histSave();
   var pct=Math.round(correct/n*100);
   var secs=Math.round(((S.finishedAt||Date.now())-S.startedAt)/1000);
   var mm=Math.floor(secs/60), ss=secs%60;
@@ -456,7 +600,9 @@ function renderResult(){
     }).join('');
     var yourTxt = your==null?'무응답':(your+1)+'번';
     return '<div class="rev">'
-      +'<div class="qmeta"><span class="tag">'+areaIc(w.it.area)+' '+areaName(w.it.area)+'</span></div>'
+      +'<div class="qmeta"><span class="tag">'+areaIc(w.it.area)+' '+areaName(w.it.area)+'</span>'
+        +'<button class="star'+(isStar(q)?' on':'')+'" data-star="'+w.j+'">'
+        +(isStar(q)?'⭐ 담음':'☆ 담기')+'</button></div>'
       +'<div class="qtext" style="font-size:1rem">'+esc(q.q)+'</div>'
       +(q.cond?'<div class="cond">'+esc(q.cond)+'</div>':'')
       +(q.table?renderTable(q.table):'')
@@ -485,6 +631,10 @@ function renderResult(){
   app.querySelector('[data-r="setup"]').onclick=renderSetup;
   app.querySelector('[data-r="again"]').onclick=function(){ start(); };
   var wo=app.querySelector('[data-r="wrongonly"]'); if(wo) wo.onclick=function(){ retryWrong(wrongs); };
+  app.querySelectorAll('[data-star]').forEach(function(b){ b.onclick=function(){
+    var j=parseInt(b.getAttribute('data-star'),10), on=toggleStar(S.list[j].q);
+    b.className='star'+(on?' on':''); b.textContent=on?'⭐ 담음':'☆ 담기';
+  };});
 }
 function retryWrong(wrongs){
   var list=wrongs.map(function(w){ return { area:w.it.area, q:prep({ q:w.it.q.q, cond:w.it.q.cond, table:w.it.q.table, why:w.it.q.why, opts:w.it.q.opts.slice(), answer:w.it.q.answer }) }; });

@@ -2,3 +2,7 @@
 ncs-data-교재.js
 build_deploy.py
 *.pdf
+
+# 학생 코드표(평문)도 절대 커밋 금지
+codes.txt
+codes*.txt
