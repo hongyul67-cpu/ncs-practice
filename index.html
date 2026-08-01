@@ -49,6 +49,26 @@
   .linkbtn{background:none; border:none; color:var(--dim); font-size:.8rem;
     text-decoration:underline; cursor:pointer; padding:0; font-family:inherit}
 
+  /* 교사용 코드 패널 */
+  .tpanel{margin:-6px 0 16px; padding:16px 18px; border-radius:16px;
+    border:1px solid #3a4a6b; background:linear-gradient(180deg,#141d31,#111827)}
+  .codenow{margin-top:12px; padding:14px 16px; border-radius:14px; text-align:center;
+    background:#0d2a44; border:1px solid #2f628f}
+  .codenow .lab{font-size:.8rem; color:#8ec5ff; font-weight:700}
+  .codenow .big{font-size:2rem; font-weight:900; letter-spacing:.12em; margin:4px 0 10px;
+    font-variant-numeric:tabular-nums}
+  .copy{padding:7px 16px; border-radius:10px; border:1px solid var(--line);
+    background:#131a29; color:var(--sub); font-size:.82rem; font-weight:700;
+    cursor:pointer; font-family:inherit}
+  .copy:hover{border-color:var(--accent); color:var(--ink)}
+  .copy.sm{padding:4px 10px; font-size:.75rem}
+  table.codes{width:100%; border-collapse:collapse; margin-top:12px; font-size:.84rem}
+  table.codes th,table.codes td{border-bottom:1px solid var(--line); padding:6px 8px; text-align:left}
+  table.codes th{color:var(--dim); font-weight:700; font-size:.76rem}
+  table.codes td.mono{font-variant-numeric:tabular-nums; letter-spacing:.06em; color:var(--ink); font-weight:700}
+  .tpanel input[type=date]{flex:1 1 150px; padding:11px 13px; border-radius:12px;
+    border:1px solid var(--line); background:#0e1524; color:var(--ink); font-family:inherit; font-size:.95rem}
+
   /* 내 학습 기록 요약 */
   .mystat{display:flex; align-items:center; gap:12px; flex-wrap:wrap;
     margin:0 4px 14px; color:var(--sub); font-size:.86rem}
@@ -169,7 +189,8 @@ var ORDER=['comm','math','problem','resource','self','relation','info','tech','o
 var WEIGHT={comm:5, math:5, problem:5, resource:3, self:1, relation:1, info:1, tech:1, org:1, ethic:1};
 
 /* ═══════════════ 실전(교재) 문항 잠금 해제 ═══════════════ */
-var LOCK={ open:false, busy:false, msg:'', msgType:'', added:0, label:'', exp:null };
+var LOCK={ open:false, busy:false, msg:'', msgType:'', added:0, label:'', exp:null,
+           teacher:false, ms:null, epoch:null, weeks:0, codes:[], showAll:false, pickDate:'' };
 var REMEMBER_KEY='ncs_practice_pw_v1';
 
 function b64(s){ var bin=atob(s), u=new Uint8Array(bin.length);
@@ -193,17 +214,19 @@ function decryptBank(pass){
       .then(function(kek){
         if(m.v<2) return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(m.iv)},kek,b64(m.data))
                     .then(function(buf){ return {buf:buf, info:{}}; });
-        // 감싼 키들을 차례로 풀어 본다(AES-GCM은 즉시라 수십 개도 순식간)
-        var i=0, keys=m.keys||[];
-        function next(){
-          if(i>=keys.length) throw new Error('BADPW');
-          var k=keys[i++];
+        // 감싼 키들을 한꺼번에 풀어 본다(AES-GCM은 즉시라 수백 개도 순식간)
+        var keys=m.keys||[];
+        return Promise.all(keys.map(function(k){
           return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(k.iv)},kek,b64(k.blob))
             .then(function(p){ return JSON.parse(new TextDecoder().decode(p)); },
-                  function(){ return next(); });
-        }
-        return next().then(function(info){
+                  function(){ return null; });
+        })).then(function(all){
+          var hit=null; for(var i=0;i<all.length;i++) if(all[i]){ hit=all[i]; break; }
+          if(!hit) throw new Error('BADPW');
+          return hit;
+        }).then(function(info){
           if(info.exp && today() > new Date(info.exp+'T00:00:00')) { var e=new Error('EXPIRED'); e.exp=info.exp; throw e; }
+          if(info.nbf && today() < new Date(info.nbf+'T00:00:00')) { var e2=new Error('NOTYET'); e2.nbf=info.nbf; throw e2; }
           return crypto.subtle.importKey('raw',b64(info.ck),{name:'AES-GCM'},false,['decrypt'])
             .then(function(ck){ return crypto.subtle.decrypt({name:'AES-GCM', iv:b64(m.iv)},ck,b64(m.data)); })
             .then(function(buf){ return {buf:buf, info:info}; });
@@ -220,6 +243,44 @@ function decryptBank(pass){
 
 function countAll(){ return ORDER.reduce(function(s,k){ return s+poolCount(k); },0); }
 
+/* ── 학생 코드 계산 규칙 (build_deploy.py 와 반드시 같아야 함) ──
+   code = HMAC-SHA256(마스터시크릿, "NCSW|" + 그 주 월요일 YYYY-MM-DD) 앞 4바이트 → 8자리 */
+function isoOf(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function mondayOf(d){
+  var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  x.setDate(x.getDate()-((x.getDay()+6)%7));      // 일요일(0)→6, 월요일(1)→0
+  return x;
+}
+function addDays(d,n){ var x=new Date(d.getFullYear(),d.getMonth(),d.getDate()); x.setDate(x.getDate()+n); return x; }
+function fmtCode(c){ return c.slice(0,4)+' '+c.slice(4); }
+
+function codeFor(msBytes, weekStart){
+  return crypto.subtle.importKey('raw',msBytes,{name:'HMAC',hash:'SHA-256'},false,['sign'])
+    .then(function(k){ return crypto.subtle.sign('HMAC',k,new TextEncoder().encode('NCSW|'+isoOf(weekStart))); })
+    .then(function(sig){
+      var b=new Uint8Array(sig);
+      var n=(b[0]*16777216 + b[1]*65536 + b[2]*256 + b[3]) % 90000000 + 10000000;
+      return String(n);
+    });
+}
+/* 교사용으로 열렸을 때 앞으로 N주치 코드를 미리 계산해 둔다 */
+function buildCodeList(){
+  if(!LOCK.ms) return Promise.resolve();
+  var ep=new Date(LOCK.epoch+'T00:00:00'), first=mondayOf(ep);
+  var cur=mondayOf(new Date());
+  var startIdx=Math.max(0, Math.round((cur-first)/604800000));   // 이번 주부터
+  var idxs=[], n=LOCK.showAll?LOCK.weeks:Math.min(startIdx+12, LOCK.weeks);
+  for(var i=LOCK.showAll?0:startIdx; i<n; i++) idxs.push(i);
+  return Promise.all(idxs.map(function(i){
+    var d0=addDays(first,i*7), d1=addDays(d0,7);
+    return codeFor(LOCK.ms,d0).then(function(c){
+      return { n:i+1, d0:isoOf(d0), d1:isoOf(d1), code:c, now:(i===startIdx) };
+    });
+  })).then(function(list){ LOCK.codes=list; });
+}
+
 function tryUnlock(pass, silent){
   if(LOCK.busy) return;
   pass=String(pass).replace(/\s+/g,'');           // 코드에 넣은 공백은 무시
@@ -233,13 +294,18 @@ function tryUnlock(pass, silent){
     LOCK.label=r.info.label||''; LOCK.exp=r.info.exp||null;
     LOCK.msg=''; LOCK.msgType='';
     try{ localStorage.setItem(REMEMBER_KEY, pass); }catch(e){}
-    renderSetup();
+    if(r.info.role==='teacher' && r.info.ms){
+      LOCK.teacher=true; LOCK.ms=b64(r.info.ms);
+      LOCK.epoch=r.info.epoch; LOCK.weeks=r.info.weeks||0;
+      buildCodeList().then(renderSetup);
+    } else renderSetup();
   }).catch(function(e){
     LOCK.busy=false;
     var t=e&&e.message;
     if(t==='FETCH')          LOCK.msg='문항 파일을 불러오지 못했습니다. 새로고침해 주세요.';
     else if(t==='OLDBROWSER')LOCK.msg='브라우저가 너무 오래되었습니다. 크롬·엣지 최신판에서 열어 주세요.';
     else if(t==='EXPIRED')   LOCK.msg='사용 기간이 끝난 코드입니다('+e.exp+'까지). 선생님께 새 코드를 받으세요.';
+    else if(t==='NOTYET')    LOCK.msg='아직 쓸 수 없는 코드입니다. '+e.nbf+'부터 사용할 수 있습니다.';
     else                     LOCK.msg='코드가 올바르지 않습니다.';
     LOCK.msgType='err';
     if(silent){ LOCK.msg=''; LOCK.msgType=''; try{ localStorage.removeItem(REMEMBER_KEY); }catch(e2){} }
@@ -250,13 +316,42 @@ function relock(){
   try{ localStorage.removeItem(REMEMBER_KEY); }catch(e){}
   location.reload();
 }
+function teacherPanelHtml(){
+  if(!LOCK.teacher) return '';
+  var now=LOCK.codes.filter(function(c){return c.now;})[0];
+  var rest=LOCK.codes.filter(function(c){return !c.now;});
+  var h='<div class="tpanel"><div class="lockhead"><b>📋 학생 코드</b>'
+    +'<span class="chip">교사용 · '+LOCK.weeks+'주치</span></div>'
+    +'<p class="lockdesc">학생에게는 <b>그 주의 코드</b>만 알려주세요. 코드는 월요일에 자동으로 바뀝니다.</p>';
+  if(now){
+    h+='<div class="codenow"><div class="lab">이번 주 · '+now.d0+' ~ '+now.d1+'</div>'
+      +'<div class="big">'+fmtCode(now.code)+'</div>'
+      +'<button class="copy" data-copy="'+now.code+'">복사</button></div>';
+  }
+  if(rest.length){
+    h+='<table class="codes"><thead><tr><th>주차</th><th>사용 기간</th><th>코드</th><th></th></tr></thead><tbody>'
+      +rest.map(function(c){ return '<tr><td>'+c.n+'</td><td>'+c.d0+' ~ '+c.d1+'</td>'
+        +'<td class="mono">'+fmtCode(c.code)+'</td>'
+        +'<td><button class="copy sm" data-copy="'+c.code+'">복사</button></td></tr>'; }).join('')
+      +'</tbody></table>';
+  }
+  h+='<div class="pwrow" style="margin-top:12px">'
+    +'<input type="date" id="lookDate" value="'+esc(LOCK.pickDate)+'" title="날짜로 코드 찾기">'
+    +'<button id="lookBtn">그날 코드</button></div>'
+    +'<p class="pwmsg" id="lookMsg"></p>'
+    +'<p style="margin:6px 0 0"><button class="linkbtn" id="allBtn">'
+    +(LOCK.showAll?'가까운 12주만 보기':'전체 '+LOCK.weeks+'주 보기')+'</button></p></div>';
+  return h;
+}
 function lockCardHtml(){
   if(LOCK.open){
     var until = LOCK.exp ? ' · '+LOCK.exp+'까지' : '';
+    var who   = LOCK.teacher ? '교사용' : LOCK.added+'문항'+until;
     return '<div class="lock open"><div class="lockhead"><b>🔓 실전 연습 문제</b>'
-      +'<span class="chip">'+LOCK.added+'문항'+esc(until)+'</span></div>'
+      +'<span class="chip">'+esc(who)+'</span></div>'
       +'<p class="lockdesc">실전 문제가 출제 범위에 포함되었습니다. 이 기기에서는 다음에 자동으로 열립니다.</p>'
-      +'<p style="margin:10px 0 0"><button class="linkbtn" id="relockBtn">이 기기에서 잠그기</button></p></div>';
+      +'<p style="margin:10px 0 0"><button class="linkbtn" id="relockBtn">이 기기에서 잠그기</button></p></div>'
+      +teacherPanelHtml();
   }
   return '<div class="lock"><div class="lockhead"><b>🔒 실전 연습 문제</b>'
     +'<span class="chip">잠김</span></div>'
@@ -455,6 +550,26 @@ function renderSetup(){
     pwI.onkeydown=function(e){ if(e.key==='Enter') go(); };
   }
   var rl=app.querySelector('#relockBtn'); if(rl) rl.onclick=relock;
+  app.querySelectorAll('[data-copy]').forEach(function(b){ b.onclick=function(){
+    var v=b.getAttribute('data-copy'), old=b.textContent;
+    var done=function(){ b.textContent='복사됨'; setTimeout(function(){ b.textContent=old; },1200); };
+    if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done,done);
+    else { var t=document.createElement('textarea'); t.value=v; document.body.appendChild(t);
+           t.select(); try{document.execCommand('copy');}catch(e){} document.body.removeChild(t); done(); }
+  };});
+  var ab=app.querySelector('#allBtn');
+  if(ab) ab.onclick=function(){ LOCK.showAll=!LOCK.showAll; buildCodeList().then(renderSetup); };
+  var lb=app.querySelector('#lookBtn'), ld=app.querySelector('#lookDate');
+  if(lb&&ld) lb.onclick=function(){
+    var msg=app.querySelector('#lookMsg');
+    if(!ld.value){ msg.className='pwmsg err'; msg.textContent='날짜를 고르세요.'; return; }
+    LOCK.pickDate=ld.value;
+    var d0=mondayOf(new Date(ld.value+'T00:00:00'));
+    codeFor(LOCK.ms,d0).then(function(c){
+      msg.className='pwmsg ok';
+      msg.textContent=isoOf(d0)+' ~ '+isoOf(addDays(d0,7))+' 주의 코드 : '+fmtCode(c);
+    });
+  };
   app.querySelectorAll('[data-seg]').forEach(function(b){ b.onclick=function(){
     var n=b.getAttribute('data-seg'), v=b.getAttribute('data-val');
     CFG[n] = (n==='count')? parseInt(v,10) : v;
