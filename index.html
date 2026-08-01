@@ -46,6 +46,9 @@
   .pwrow button:disabled{opacity:.55; cursor:default}
   .pwmsg{margin:10px 2px 0; font-size:.84rem; min-height:1.2em}
   .pwmsg.err{color:var(--bad)} .pwmsg.ok{color:var(--good)} .pwmsg.wait{color:var(--warn)}
+  .teachhint{margin:10px 0 0; padding:9px 12px; border-radius:10px; background:#101c2c;
+    border:1px dashed #35507a; color:var(--sub); font-size:.8rem}
+  .teachhint b{color:var(--ink)}
   .linkbtn{background:none; border:none; color:var(--dim); font-size:.8rem;
     text-decoration:underline; cursor:pointer; padding:0; font-family:inherit}
 
@@ -314,6 +317,9 @@ function tryUnlock(pass, silent){
 }
 function relock(){
   try{ localStorage.removeItem(REMEMBER_KEY); }catch(e){}
+  // 새로고침 후 브라우저가 스크롤 위치를 되살리면 맨 위 입력칸이 안 보인다
+  try{ history.scrollRestoration='manual'; }catch(e){}
+  window.scrollTo(0,0);
   location.reload();
 }
 function teacherPanelHtml(){
@@ -357,10 +363,12 @@ function lockCardHtml(){
     +'<span class="chip">잠김</span></div>'
     +'<p class="lockdesc">수업 시간에 안내한 <b>8자리 코드</b>를 넣으면 실전 연습 문제가 함께 출제됩니다. '
     +'코드 없이도 아래 <b>자작 연습 문제</b>는 바로 풀 수 있습니다.</p>'
-    +'<div class="pwrow"><input type="text" id="pwInput" placeholder="예) 1234 5678" autocomplete="off" '
-    +'inputmode="numeric" autocapitalize="off" spellcheck="false"'+(LOCK.busy?' disabled':'')+'>'
+    +'<div class="pwrow"><input type="text" id="pwInput" placeholder="8자리 코드 또는 교사용 암호" '
+    +'autocomplete="off" autocapitalize="off" spellcheck="false"'+(LOCK.busy?' disabled':'')+'>'
     +'<button id="pwBtn"'+(LOCK.busy?' disabled':'')+'>'+(LOCK.busy?'여는 중…':'열기')+'</button></div>'
-    +'<p class="pwmsg '+LOCK.msgType+'">'+esc(LOCK.msg)+'</p></div>';
+    +'<p class="pwmsg '+LOCK.msgType+'">'+esc(LOCK.msg)+'</p>'
+    +'<p class="teachhint">👩‍🏫 <b>선생님</b>은 같은 칸에 <b>교사용 암호</b>를 넣으세요. '
+    +'이번 주 학생 코드가 화면에 바로 나옵니다.</p></div>';
 }
 
 /* ═══════════════ 내 학습 기록 (오답·별표) ═══════════════ */
