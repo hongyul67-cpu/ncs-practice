@@ -65,6 +65,17 @@
     cursor:pointer; font-family:inherit}
   .copy:hover{border-color:var(--accent); color:var(--ink)}
   .copy.sm{padding:4px 10px; font-size:.75rem}
+  .fold{display:flex; align-items:center; gap:9px; width:100%; margin-top:14px;
+    padding:11px 14px; border-radius:12px; cursor:pointer; text-align:left;
+    border:1px solid var(--line); background:#131a29; color:var(--sub);
+    font-size:.88rem; font-weight:700; font-family:inherit}
+  .fold:hover{border-color:var(--accent); color:var(--ink)}
+  .fold.open{background:#0d2a44; border-color:#2f628f; color:var(--ink)}
+  .fold .arrow{flex:none; width:14px; color:var(--accent); font-size:.8rem}
+  .fold .cnt3{margin-left:auto; padding:2px 9px; border-radius:999px;
+    background:rgba(0,0,0,.3); font-size:.74rem; font-weight:800}
+  .foldwarn{margin:10px 0 0; padding:9px 12px; border-radius:10px; background:#241d13;
+    border:1px solid #4a3a1a; color:#ffd98a; font-size:.78rem}
   table.codes{width:100%; border-collapse:collapse; margin-top:12px; font-size:.84rem}
   table.codes th,table.codes td{border-bottom:1px solid var(--line); padding:6px 8px; text-align:left}
   table.codes th{color:var(--dim); font-weight:700; font-size:.76rem}
@@ -193,7 +204,8 @@ var WEIGHT={comm:5, math:5, problem:5, resource:3, self:1, relation:1, info:1, t
 
 /* ═══════════════ 실전(교재) 문항 잠금 해제 ═══════════════ */
 var LOCK={ open:false, busy:false, msg:'', msgType:'', added:0, label:'', exp:null,
-           teacher:false, ms:null, epoch:null, weeks:0, codes:[], showAll:false, pickDate:'' };
+           teacher:false, ms:null, epoch:null, weeks:0, codes:[],
+           showFuture:false, showAll:false, pickDate:'' };
 var REMEMBER_KEY='ncs_practice_pw_v1';
 
 function b64(s){ var bin=atob(s), u=new Uint8Array(bin.length);
@@ -335,18 +347,26 @@ function teacherPanelHtml(){
       +'<button class="copy" data-copy="'+now.code+'">복사</button></div>';
   }
   if(rest.length){
-    h+='<table class="codes"><thead><tr><th>주차</th><th>사용 기간</th><th>코드</th><th></th></tr></thead><tbody>'
-      +rest.map(function(c){ return '<tr><td>'+c.n+'</td><td>'+c.d0+' ~ '+c.d1+'</td>'
-        +'<td class="mono">'+fmtCode(c.code)+'</td>'
-        +'<td><button class="copy sm" data-copy="'+c.code+'">복사</button></td></tr>'; }).join('')
-      +'</tbody></table>';
+    h+='<button class="fold'+(LOCK.showFuture?' open':'')+'" id="foldBtn">'
+      +'<span class="arrow">'+(LOCK.showFuture?'▾':'▸')+'</span>'
+      +'앞으로의 주차 코드'
+      +'<span class="cnt3">'+rest.length+'주</span></button>';
+    if(LOCK.showFuture){
+      h+='<p class="foldwarn">교실 화면에 띄울 때는 접어 두세요. 학생이 다음 주 코드를 미리 볼 수 있습니다.'
+        +'(미리 쓰는 것은 막혀 있습니다)</p>'
+        +'<div class="tscroll"><table class="codes"><thead><tr><th>주차</th><th>사용 기간</th><th>코드</th><th></th></tr></thead><tbody>'
+        +rest.map(function(c){ return '<tr><td>'+c.n+'</td><td>'+c.d0+' ~ '+c.d1+'</td>'
+          +'<td class="mono">'+fmtCode(c.code)+'</td>'
+          +'<td><button class="copy sm" data-copy="'+c.code+'">복사</button></td></tr>'; }).join('')
+        +'</tbody></table></div>'
+        +'<p style="margin:8px 0 0"><button class="linkbtn" id="allBtn">'
+        +(LOCK.showAll?'가까운 12주만 보기':'전체 '+LOCK.weeks+'주 보기')+'</button></p>';
+    }
   }
-  h+='<div class="pwrow" style="margin-top:12px">'
+  h+='<div class="pwrow" style="margin-top:14px">'
     +'<input type="date" id="lookDate" value="'+esc(LOCK.pickDate)+'" title="날짜로 코드 찾기">'
     +'<button id="lookBtn">그날 코드</button></div>'
-    +'<p class="pwmsg" id="lookMsg"></p>'
-    +'<p style="margin:6px 0 0"><button class="linkbtn" id="allBtn">'
-    +(LOCK.showAll?'가까운 12주만 보기':'전체 '+LOCK.weeks+'주 보기')+'</button></p></div>';
+    +'<p class="pwmsg" id="lookMsg"></p></div>';
   return h;
 }
 function lockCardHtml(){
@@ -565,6 +585,12 @@ function renderSetup(){
     else { var t=document.createElement('textarea'); t.value=v; document.body.appendChild(t);
            t.select(); try{document.execCommand('copy');}catch(e){} document.body.removeChild(t); done(); }
   };});
+  var fb=app.querySelector('#foldBtn');
+  if(fb) fb.onclick=function(){
+    LOCK.showFuture=!LOCK.showFuture;
+    if(!LOCK.showFuture) LOCK.showAll=false;      // 접으면 전체보기도 초기화
+    buildCodeList().then(renderSetup);
+  };
   var ab=app.querySelector('#allBtn');
   if(ab) ab.onclick=function(){ LOCK.showAll=!LOCK.showAll; buildCodeList().then(renderSetup); };
   var lb=app.querySelector('#lookBtn'), ld=app.querySelector('#lookDate');
