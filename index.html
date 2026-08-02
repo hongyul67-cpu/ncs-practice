@@ -188,12 +188,22 @@
 <body>
 <div class="wrap" id="app"></div>
 
+<!-- 결과 제출 위젯 — 선생님이 ?rc=<Apps Script exec 주소> 를 붙여 나눠주면 그 시트로 제출됨
+     (rc 없이 그냥 열면 제출 버튼이 아예 안 보이고, 학습에는 아무 영향 없음) -->
+<script src="https://hongyul67-cpu.github.io/links/collector.js"
+        data-tool="NCS 직업기초능력 연습" data-max-num="40"></script>
+
 <!-- 자작 문항(자체 제작) — 공개 -->
 <script src="ncs-data.js"></script>
 <script src="ncs-data-자작.js"></script>
 <script>
 (function(){
 'use strict';
+/* 선생님 결과수집 주소가 연결됐는지 (연결됐을 때만 제출 버튼 노출) */
+function hasRC(){
+  try{ return !!(window.ResultCollector && ResultCollector.config && ResultCollector.config.endpoint); }
+  catch(e){ return false; }
+}
 if(typeof AREAS==='undefined'){ document.getElementById('app').innerHTML='<div class="card">문제은행을 불러오지 못했습니다. 새로고침해 주세요.</div>'; return; }
 
 var app=document.getElementById('app');
@@ -772,6 +782,8 @@ function renderResult(){
       +'<button class="prim" data-r="again">새 문제 다시</button>'
       +(wrongs.length?'<button data-r="wrongonly">오답만 다시</button>':'')
       +'<button data-r="setup">설정으로</button>'
+      /* 선생님이 ?rc= 를 붙여 나눠준 링크로 열었을 때만 보임 */
+      +(hasRC()?'<button data-r="submit">📤 선생님께 결과 제출</button>':'')
     +'</div>'
   +'</div>'
   +'<h1 style="font-size:1.15rem;margin:22px 4px 10px">오답 복습 ('+wrongs.length+')</h1>'
@@ -779,6 +791,14 @@ function renderResult(){
 
   app.querySelector('[data-r="setup"]').onclick=renderSetup;
   app.querySelector('[data-r="again"]').onclick=function(){ start(); };
+  var sb=app.querySelector('[data-r="submit"]');
+  if(sb) sb.onclick=function(){
+    ResultCollector.open({
+      score: pct, correct: correct, total: n,
+      wrong: wrongs.map(function(w){ return w.j+1; }),   // 문항 번호(1부터)
+      durationSec: secs
+    });
+  };
   var wo=app.querySelector('[data-r="wrongonly"]'); if(wo) wo.onclick=function(){ retryWrong(wrongs); };
   app.querySelectorAll('[data-star]').forEach(function(b){ b.onclick=function(){
     var j=parseInt(b.getAttribute('data-star'),10), on=toggleStar(S.list[j].q);
