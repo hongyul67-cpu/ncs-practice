@@ -282,7 +282,12 @@ var WEIGHT={comm:5, math:5, problem:5, resource:3, self:1, relation:1, info:1, t
 var LOCK={ open:false, busy:false, msg:'', msgType:'', added:0, label:'', exp:null,
            teacher:false, ms:null, epoch:null, weeks:0, codes:[],
            showFuture:false, showAll:false, pickDate:'' };
-var REMEMBER_KEY='ncs_practice_pw_v1';
+/* 저장 키가 두 개다. REMEMBER_KEY 는 이 도구 것(학생 주차코드일 수도 있다),
+   SHARED_KEY 는 도구 전체 공용. 도구가 모두 같은 주소에 있어 localStorage 를 공유하므로
+   어디서든 한 번 열면 나머지도 그냥 열린다.
+   공용 키에는 교사용 암호만 저장한다 — 기간이 있는 학생 코드를 공용에 넣으면
+   다른 도구가 만료된 코드를 물고 있게 된다. 실패해도 공용 키는 지우지 않는다. */
+var REMEMBER_KEY='ncs_practice_pw_v1', SHARED_KEY='hong_pw_v1';
 
 function b64(s){ var bin=atob(s), u=new Uint8Array(bin.length);
   for(var i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }
@@ -384,7 +389,10 @@ function tryUnlock(pass, silent){
     LOCK.added=countAll()-before;
     LOCK.label=r.info.label||''; LOCK.exp=r.info.exp||null;
     LOCK.msg=''; LOCK.msgType='';
-    try{ localStorage.setItem(REMEMBER_KEY, pass); }catch(e){}
+    try{
+      localStorage.setItem(REMEMBER_KEY, pass);
+      if(r.info.role==='teacher') localStorage.setItem(SHARED_KEY, pass);
+    }catch(e){}
     if(r.info.role==='teacher' && r.info.ms){
       LOCK.teacher=true; LOCK.ms=b64(r.info.ms);
       LOCK.epoch=r.info.epoch; LOCK.weeks=r.info.weeks||0;
@@ -399,7 +407,7 @@ function tryUnlock(pass, silent){
     else if(t==='NOTYET')    LOCK.msg='아직 쓸 수 없는 코드입니다. '+e.nbf+'부터 사용할 수 있습니다.';
     else                     LOCK.msg='코드가 올바르지 않습니다.';
     LOCK.msgType='err';
-    if(silent){ LOCK.msg=''; LOCK.msgType=''; try{ localStorage.removeItem(REMEMBER_KEY); }catch(e2){} }
+    if(silent){ LOCK.msg=''; LOCK.msgType=''; try{ localStorage.removeItem(REMEMBER_KEY); }catch(e2){} }   // 공용 키는 건드리지 않는다
     renderSetup();
   });
 }
@@ -883,8 +891,9 @@ renderSetup();
 
 /* 이 기기에서 이미 푼 적이 있으면 자동으로 열기 */
 try{
-  var saved=localStorage.getItem(REMEMBER_KEY);
-  if(saved) tryUnlock(saved, true);
+  var a=localStorage.getItem(REMEMBER_KEY), b=localStorage.getItem(SHARED_KEY);
+  if(a) tryUnlock(a, true);
+  else if(b) tryUnlock(b, true);
 }catch(e){}
 })();
 </script>
