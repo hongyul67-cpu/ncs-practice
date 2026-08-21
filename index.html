@@ -340,7 +340,8 @@ function decryptBank(pass){
 function countAll(){ return ORDER.reduce(function(s,k){ return s+poolCount(k); },0); }
 
 /* ── 학생 코드 계산 규칙 (build_deploy.py 와 반드시 같아야 함) ──
-   code = HMAC-SHA256(마스터시크릿, "NCSW|" + 그 주 월요일 YYYY-MM-DD) 앞 4바이트 → 8자리 */
+   code = HMAC-SHA256(마스터시크릿, 접두어 + 그 주 월요일 YYYY-MM-DD) 앞 4바이트 → 8자리
+   접두어는 암호문 안(LOCK.prefix)에서 온다 — 도구가 모두 같은 값을 써서 코드가 하나로 통한다 */
 function isoOf(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
@@ -354,7 +355,7 @@ function fmtCode(c){ return c.slice(0,4)+' '+c.slice(4); }
 
 function codeFor(msBytes, weekStart){
   return crypto.subtle.importKey('raw',msBytes,{name:'HMAC',hash:'SHA-256'},false,['sign'])
-    .then(function(k){ return crypto.subtle.sign('HMAC',k,new TextEncoder().encode('NCSW|'+isoOf(weekStart))); })
+    .then(function(k){ return crypto.subtle.sign('HMAC',k,new TextEncoder().encode((LOCK.prefix||'HONGW|')+isoOf(weekStart))); })
     .then(function(sig){
       var b=new Uint8Array(sig);
       var n=(b[0]*16777216 + b[1]*65536 + b[2]*256 + b[3]) % 90000000 + 10000000;
@@ -396,6 +397,7 @@ function tryUnlock(pass, silent){
     if(r.info.role==='teacher' && r.info.ms){
       LOCK.teacher=true; LOCK.ms=b64(r.info.ms);
       LOCK.epoch=r.info.epoch; LOCK.weeks=r.info.weeks||0;
+      LOCK.prefix=r.info.prefix||'HONGW|';   // 도구 공용 접두어
       buildCodeList().then(renderSetup);
     } else renderSetup();
   }).catch(function(e){
