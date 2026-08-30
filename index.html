@@ -535,7 +535,9 @@ function pool(areaKey, level){
   var a=AREAS[areaKey]; if(!a) return [];
   var seen={}, out=[];
   function take(q){ if(!q||!q.opts||typeof q.answer!=='number') return;
-    var key=(q.q||'')+'|'+(q.opts||[]).join('¦'); if(seen[key]) return; seen[key]=1; out.push(q); }
+    /* 조건(cond)까지 넣어야 한다 — 참거짓·조건추리는 발문과 보기가 같고 진술만 다른
+       별개 문항이 많아, 빼면 서로 다른 문제가 같은 것으로 묶여 사라진다. */
+    var key=(q.q||'')+'|'+(q.opts||[]).join('¦')+'|'+(q.cond||''); if(seen[key]) return; seen[key]=1; out.push(q); }
   var g=a.games||{};
   for(var gk in g){ if(gk==='order') continue; var gg=g[gk]; if(!gg) continue;
     if(level!=='hard') (gg.basic||[]).forEach(take);
@@ -769,9 +771,11 @@ function renderQuiz(){
     +'<div class="opts">'+optsHtml+'</div>'
     +'<div class="nav">'
       +'<button data-nav="prev" '+(S.i===0?'disabled':'')+'>◀ 이전</button>'
-      +(S.i===n-1
-        ? '<button class="prim" data-nav="submit">채점하기 ✓</button>'
-        : '<button class="prim" data-nav="next">다음 ▶</button>')
+      /* 아래 안내가 「언제든 채점 가능」이라고 적혀 있다 —
+         마지막 문항에서만 채점 단추를 내주면 그 말과 어긋난다.
+         빈 문항이 있으면 어차피 확인창이 한 번 막아 준다. */
+      +'<button data-nav="submit">채점하기 ✓</button>'
+      +(S.i===n-1 ? '' : '<button class="prim" data-nav="next">다음 ▶</button>')
     +'</div>'
     +'<div class="sheet">'+sheet+'</div>'
     +'<p class="sub" style="text-align:center;margin:12px 0 0">답안지에서 번호를 눌러 이동 · 언제든 채점 가능</p>'
