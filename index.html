@@ -182,6 +182,10 @@
   .rev + .rev{margin-top:12px}
   .rev .why{margin-top:11px; padding:11px 13px; border-radius:10px; background:#0f1c14;
     border:1px solid #234a33; color:#a7e7c4; font-size:.9rem; white-space:pre-wrap}
+  /* 해설 그림 (exfig.js) — 그림 안에 흰 종이가 들어 있다 */
+  .rev .exfig{margin-top:12px; display:grid; gap:14px}
+  .rev .exfig figure.fig{max-width:520px; width:100%}
+  .rev .exfig figcaption{color:var(--sub)}
   .rev .yourans{font-size:.82rem; color:var(--bad); margin-top:8px}
   hr.sep{border:none; border-top:1px solid var(--line); margin:20px 0}
   @media(max-width:560px){ .wrap{padding:14px 12px 70px} .qtext{font-size:1.04rem} .score{font-size:2.8rem} }
@@ -262,6 +266,10 @@
 })();
 </script>
 <!-- 자작 문항(자체 제작) — 공개 -->
+<!-- 해설 그림 — 공용 도우미(fig.js) · NCS 마스터 그림 사본(figs.js) · 해설 연결 규칙(exfig.js) -->
+<script src="https://hongyul67-cpu.github.io/links/fig.js"></script>
+<script src="figs.js"></script>
+<script src="exfig.js"></script>
 <script src="ncs-data.js"></script>
 <script src="ncs-data-자작.js"></script>
 <script>
@@ -851,6 +859,7 @@ function renderResult(){
       +'<div class="opts">'+opts+'</div>'
       +'<div class="yourans">내 답: '+yourTxt+' · 정답: '+(q.answer+1)+'번</div>'
       +(q.why?'<div class="why">💡 '+esc(q.why)+'</div>':'')
+      +(window.EXFIG?EXFIG.html({ area:w.it.area, q:q.q, cond:q.cond, a:q.opts[q.answer], why:q.why }):'')
     +'</div>';
   }).join('') : '<div class="rev" style="text-align:center;color:var(--good)">🎉 틀린 문항이 없습니다! 완벽합니다.</div>';
 
